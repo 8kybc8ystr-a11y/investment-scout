@@ -6,6 +6,7 @@ import math
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from datetime import date
 import pandas as pd
 import yfinance as yf
 from discovery import discover
@@ -47,7 +48,7 @@ def get_price_history(ticker):
         'price': round(now, 4), 'change_5d': change(5),
         'change_30d': change(21), 'change_90d': change(63),
         'drawdown_1y': round(100 * (now / peak - 1), 2),
-        'history': [{'date': idx.strftime('%Y-%m-%d'), 'close': round(float(v), 4)} for idx, v in closes.iloc[-130:].items()],
+        'history': [{'date': idx.strftime('%Y-%m-%d'), 'close': round(float(v), 4)} for idx, v in closes.items()],
         'price_as_of': closes.index[-1].strftime('%Y-%m-%d'),
     }
 
@@ -113,6 +114,18 @@ def scan(symbols=None, pause=0.15, discovery_count=15):
     if symbols:
         wanted = set(symbols)
         records = [r for r in records if r['ticker'] in wanted]
+    # Persist first-seen dates in the existing snapshot, so no additional GitHub file is needed.
+    try:
+        previous = json.loads(DATA.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        previous = {}
+    first_seen = dict(previous.get('first_seen_registry') or {})
+    # Upgrade from V3: existing stocks are not incorrectly marked as newly added.
+    prior_date = str(previous.get('generated_at_utc', ''))[:10]
+    for old in previous.get('stocks', []):
+        if old.get('ticker') and old['ticker'] not in first_seen:
+            first_seen[old['ticker']] = old.get('first_seen') or prior_date or date.today().isoformat()
+    today = datetime.now(timezone.utc).date().isoformat()
     stocks, errors = [], []
     for record in records:
         symbol = record['ticker']
@@ -140,6 +153,12 @@ def scan(symbols=None, pause=0.15, discovery_count=15):
                 'market_cap': number(info.get('marketCap')),
                 'data_provider': 'Yahoo Finance via yfinance',
             }
+            row['first_seen'] = first_seen.get(symbol, today)
+            row['is_new'] = symbol not in first_seen
+            first_seen.setdefault(symbol, today)
+            if 'discovery_rank_score' in record:
+                row['discovery_rank_score'] = record['discovery_rank_score']
+                row['avg_daily_dollar_volume'] = record['avg_daily_dollar_volume']
             row = score_stock(row)
             row['positives'], row['risks'] = explain(row)
             stocks.append(row)
@@ -147,7 +166,7 @@ def scan(symbols=None, pause=0.15, discovery_count=15):
             errors.append({'ticker': symbol, 'error': str(exc)[:180]})
         time.sleep(pause)
     stocks.sort(key=lambda r: (r['score'], r['data_coverage']), reverse=True)
-    return {'generated_at_utc': datetime.now(timezone.utc).isoformat(), 'method': 'rules_v3',
+    return {'generated_at_utc': datetime.now(timezone.utc).isoformat(), 'method': 'rules_v3_1', 'first_seen_registry': first_seen,
             'universe_count': len(records), 'success_count': len(stocks),
             'discovered_count': len(discovered), 'discovery_errors': discovery_errors,
             'stocks': stocks, 'errors': errors}

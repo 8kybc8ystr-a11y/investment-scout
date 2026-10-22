@@ -1,0 +1,52 @@
+name: Daily Stock Scan
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '20 19 * * 1-5'
+permissions:
+  contents: write
+concurrency:
+  group: daily-stock-scan
+  cancel-in-progress: false
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run stock scanner
+        run: python scanner.py --discovery-count 15
+      - name: Commit and push snapshot
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          cp data/latest.json /tmp/investment-scout-latest.json
+          git reset --hard HEAD
+          git fetch origin main
+          git checkout -B main origin/main
+          mkdir -p data
+          cp /tmp/investment-scout-latest.json data/latest.json
+          git add data/latest.json
+          if git diff --cached --quiet; then
+            echo "Keine neuen Änderungen."
+            exit 0
+          fi
+          git commit -m "Update daily stock snapshot"
+          for attempt in 1 2 3; do
+            if git push origin main; then
+              echo "Snapshot erfolgreich gespeichert."
+              exit 0
+            fi
+            echo "Push-Konflikt, erneuter Versuch $attempt"
+            git fetch origin main
+            git rebase origin/main
+            sleep 5
+          done
+          echo "Snapshot konnte nicht hochgeladen werden."
+          exit 1

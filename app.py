@@ -8,7 +8,7 @@ import streamlit as st
 from ai_research import get_news, build_analysis
 from security import require_login, check_ai_limit, register_ai_request
 
-st.set_page_config(page_title='Investment Scout V3', page_icon='📈', layout='wide')
+st.set_page_config(page_title='Investment Scout V3.1', page_icon='📈', layout='wide')
 require_login()
 
 ROOT = Path(__file__).resolve().parent
@@ -66,7 +66,7 @@ if data.get('errors'):
 st.subheader('Investment-Ranking')
 if 'discovery_source' in df.columns:
     new_count = int((df['discovery_source'] != 'Eigene Liste').sum())
-    st.info(f'🔎 Automatische Kandidatensuche: {new_count} zusätzlich entdeckte Aktien erfolgreich analysiert. Täglich wechselnde Auswahl aus S&P 500 und Nasdaq-100; kein vollständiger Weltmarkt-Scan.')
+    st.info(f'🔎 Intelligente Vorauswahl: {new_count} zusätzliche Aktien nach Kursrückgang, Stabilisierung und Liquidität analysiert. Kandidaten aus S&P 500 und Nasdaq-100; kein vollständiger Weltmarkt-Scan.')
     if data.get('discovery_errors'):
         with st.expander('Hinweise zur Kandidatensuche'):
             st.write(data['discovery_errors'])
@@ -75,12 +75,23 @@ else:
 cols = ['ticker', 'name', 'region', 'sector', 'score', 'price', 'currency', 'change_30d', 'drawdown_1y', 'dividend_yield_pct', 'forward_pe', 'data_coverage']
 if 'discovery_source' in filtered.columns:
     cols.insert(3, 'discovery_source')
-st.dataframe(filtered[cols].rename(columns={'ticker':'Symbol','name':'Unternehmen','region':'Region','discovery_source':'Quelle','sector':'Sektor','score':'Score','price':'Kurs','currency':'Währung','change_30d':'30T %','drawdown_1y':'Abstand Hoch %','dividend_yield_pct':'Dividende %','forward_pe':'Forward-KGV','data_coverage':'Datenfelder / 7'}), use_container_width=True, hide_index=True)
+if 'is_new' in filtered.columns:
+    cols.insert(0, 'is_new')
+if 'first_seen' in filtered.columns:
+    cols.insert(1, 'first_seen')
+table_data = filtered[cols].copy()
+if 'is_new' in table_data:
+    table_data['is_new'] = table_data['is_new'].map({True: '🆕 Neu', False: '–'}).fillna('–')
+st.dataframe(table_data.rename(columns={'ticker':'Symbol','name':'Unternehmen','region':'Region','discovery_source':'Quelle','is_new':'Neu','first_seen':'Seit','sector':'Sektor','score':'Score','price':'Kurs','currency':'Währung','change_30d':'30T %','drawdown_1y':'Abstand Hoch %','dividend_yield_pct':'Dividende %','forward_pe':'Forward-KGV','data_coverage':'Datenfelder / 7'}), use_container_width=True, hide_index=True)
 
 if len(filtered):
     selected = st.selectbox('Aktie im Detail untersuchen', filtered['ticker'].tolist(), format_func=lambda t: f"{t} · {df.loc[df.ticker==t,'name'].iloc[0]}")
     stock = next(s for s in stocks if s['ticker'] == selected)
     st.subheader(f"{stock['name']} ({selected})")
+    if stock.get('is_new'):
+        st.success('🆕 Neu im heutigen Scan')
+    if stock.get('first_seen'):
+        st.caption(f"Erstmals erfasst: {stock['first_seen']}")
     if stock.get('discovery_source') and stock['discovery_source'] != 'Eigene Liste':
         st.caption(f"🔎 Automatisch entdeckt über {stock['discovery_source']}")
     x, y, z = st.columns(3)
@@ -89,7 +100,7 @@ if len(filtered):
     z.metric('Dividendenrendite', f"{stock['dividend_yield_pct']:.2f} %" if stock.get('dividend_yield_pct') is not None else 'Keine Daten')
     hist = pd.DataFrame(stock.get('history', []))
     if not hist.empty:
-        fig = px.line(hist, x='date', y='close', title='Kursverlauf (adjustiert, bis zu 130 Handelstage)', labels={'date':'Datum','close':stock['currency']})
+        fig = px.line(hist, x='date', y='close', title='Kursverlauf der letzten 12 Monate (dividenden- und splitbereinigt)', labels={'date':'Datum','close':stock['currency']})
         st.plotly_chart(fig, use_container_width=True)
     left, right = st.columns(2)
     with left:
@@ -100,8 +111,27 @@ if len(filtered):
         st.markdown('#### Risiken und offene Fragen')
         for r in stock.get('risks', []):
             st.write('• ' + r)
-    st.markdown('#### Score-Zerlegung')
-    st.bar_chart(pd.Series(stock.get('score_parts', {}), name='Punkte'))
+    with st.expander('🧮 So setzt sich der Score zusammen (maximal 100 Punkte)', expanded=False):
+        st.caption('Je höher der Wert, desto mehr Punkte vergibt das regelbasierte Modell. Die Gewichtungen sind fest und keine statistisch validierte Prognose. Fehlende Daten ergeben 0 Punkte.')
+        weights = [
+            ('correction', 'Kursrückgang', 25, '10–30 % unter Jahreshoch; starker Monatsverlust kann Bonus bringen.'),
+            ('dividend', 'Dividendenrendite', 15, '3 Punkte je Prozent Rendite, maximal 15.'),
+            ('profitability', 'Gewinnmarge', 15, '0,75 Punkte je Prozent Gewinnmarge.'),
+            ('roe', 'Eigenkapitalrendite', 10, '0,5 Punkte je Prozent ROE.'),
+            ('valuation', 'Forward-KGV', 15, 'Bis 12: 15 P.; bis 20: 10 P.; bis 30: 4 P.'),
+            ('cashflow', 'Freier Cashflow', 10, 'Positiver freier Cashflow: 10 P.'),
+            ('debt', 'Verschuldung', 10, 'Debt/Equity bis 100: 10 P.; bis 200: 5 P.'),
+        ]
+        parts = stock.get('score_parts') or {}
+        for key, label, maximum, explanation in weights:
+            points = float(parts.get(key, 0))
+            a, b = st.columns([3, 1])
+            a.markdown(f'**{label}**')
+            b.markdown(f'**{points:g} / {maximum}**')
+            st.progress(min(1.0, max(0.0, points / maximum)))
+            st.caption(explanation)
+        st.markdown(f"**Gesamt: {stock['score']:.1f} / 100 Punkte**")
+    st.caption('Gewichtung: Kursrückgang 25 % · Dividende 15 % · Gewinnmarge 15 % · ROE 10 % · Bewertung 15 % · Cashflow 10 % · Verschuldung 10 %.')
     st.info('Die quantitative Bewertung ist regelbasiert. Es liegt **kein verifizierter Fair Value** vor.')
     st.caption(f"Kursdatum: {stock.get('price_as_of', '?')} · Quelle: {stock.get('data_provider', '?')} · Abdeckung: {stock.get('data_coverage', '?')}/7 Felder")
     st.link_button('Kurs- und Nachrichtenansicht öffnen', f'https://finance.yahoo.com/quote/{selected}/')
