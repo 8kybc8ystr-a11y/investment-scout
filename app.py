@@ -8,12 +8,17 @@ import streamlit as st
 from ai_research import get_news, build_analysis
 from security import require_login, check_ai_limit, register_ai_request
 
-st.set_page_config(page_title='Investment Scout V3.1', page_icon='📈', layout='wide')
+st.set_page_config(page_title='Investment Scout V3.2', page_icon='📈', layout='wide')
 require_login()
 
 ROOT = Path(__file__).resolve().parent
-st.title('📈 Investment Scout')
-st.caption('Automatische Kandidatensuche · Dividenden- & Kursrückgang-Screener · KI-Research auf Abruf · Keine Anlageberatung')
+st.markdown("""<style>
+.block-container {padding-top: 1.4rem; max-width: 1500px}
+[data-testid="stMetric"] {background: rgba(127,127,127,.055); border: 1px solid rgba(127,127,127,.17); border-radius: 13px; padding: 15px}
+h1 {letter-spacing: -.035em}
+</style>""", unsafe_allow_html=True)
+st.title('Investment Scout  |  Marktübersicht')
+st.caption('V3.2 · Regelbasiertes Aktien-Screening · Manuelle KI-Recherche · Keine Kaufempfehlung')
 
 snapshot = ROOT / 'data' / 'latest.json'
 if not snapshot.exists():
@@ -63,7 +68,37 @@ c4.metric('Datenstand (UTC)', data.get('generated_at_utc', '?')[:16].replace('T'
 if data.get('errors'):
     st.caption(f"{len(data['errors'])} Aktien konnten nicht verarbeitet werden. Details unten.")
 
-st.subheader('Investment-Ranking')
+# Top 5 aus dem gesamten heutigen Scan, unabhängig von den persönlichen Tabellenfiltern.
+# Für eine Mindestzuverlässigkeit werden Aktien mit sehr lückenhaften Fundamentaldaten ausgeschlossen.
+st.subheader('Top 5 des Tages')
+st.caption('Die fünf höchstbewerteten Aktien mit mindestens 5 von 7 verfügbaren Kennzahlen. '
+           'Sortierung: Attraktivitäts-Score, dann Datenabdeckung. Keine Kaufempfehlung und keine Kursprognose.')
+top_candidates = df[df['data_coverage'].fillna(0) >= 5].sort_values(
+    ['score', 'data_coverage', 'ticker'], ascending=[False, False, True]
+).head(5)
+if top_candidates.empty:
+    st.warning('Heute gibt es keine Kandidaten mit ausreichend vollständigen Fundamentaldaten (mindestens 5/7).')
+else:
+    cards = st.columns(len(top_candidates))
+    for pos, (_, candidate) in enumerate(top_candidates.iterrows(), start=1):
+        with cards[pos-1]:
+            with st.container(border=True):
+                ticker_name = str(candidate['ticker'])
+                new_mark = ' 🆕' if candidate.get('is_new', False) else ''
+                st.markdown(f'**#{pos} · {ticker_name}{new_mark}**')
+                st.caption(str(candidate.get('name', ticker_name))[:42])
+                st.metric('Screening-Score', f"{candidate['score']:.0f}/100")
+                st.caption(f"Datenqualität: {int(candidate['data_coverage'])}/7 · {candidate.get('region','–')}")
+                if st.button('Details ansehen', key=f'top_{ticker_name}', use_container_width=True):
+                    st.session_state['selected_stock'] = ticker_name
+st.info('Ein hoher Score zeigt nur, dass eine Aktie die gewählten quantitativen Kriterien erfüllt. '
+        'Ein Kursrückgang oder eine hohe Dividende kann auch ein Warnsignal sein. '
+        'Vor einem Kauf sollten Bewertung, Nachrichten, Bilanz und persönliche Risikotoleranz geprüft werden.')
+with st.expander('Wie werden die Top 5 ermittelt?', expanded=False):
+    st.markdown('**Tägliche Auswahl:** Der Scanner untersucht die eigene Aktienliste und zusätzliche automatisch gefundene Kandidaten. Für die Top 5 werden nur Aktien mit mindestens fünf von sieben Fundamentaldatenfeldern berücksichtigt. Danach entscheidet der **Score von 0 bis 100**; bei Gleichstand gewinnt die höhere Datenabdeckung.\n\n**Punkteverteilung:** Kursrückgang 25 · Dividendenrendite 15 · Gewinnmarge 15 · Eigenkapitalrendite 10 · Forward-KGV 15 · positiver freier Cashflow 10 · Verschuldung 10.\n\n**Grenzen:** Der Score ist heuristisch, branchenübergreifend nur eingeschränkt vergleichbar und berücksichtigt keine vollständige Unternehmensbewertung. Die Top 5 sind die attraktivsten **innerhalb der tatsächlich gescannten Auswahl**, nicht des gesamten Aktienmarkts.')
+
+st.divider()
+st.subheader('Alle Aktien im Ranking')
 if 'discovery_source' in df.columns:
     new_count = int((df['discovery_source'] != 'Eigene Liste').sum())
     st.info(f'🔎 Intelligente Vorauswahl: {new_count} zusätzliche Aktien nach Kursrückgang, Stabilisierung und Liquidität analysiert. Kandidaten aus S&P 500 und Nasdaq-100; kein vollständiger Weltmarkt-Scan.')
@@ -85,7 +120,11 @@ if 'is_new' in table_data:
 st.dataframe(table_data.rename(columns={'ticker':'Symbol','name':'Unternehmen','region':'Region','discovery_source':'Quelle','is_new':'Neu','first_seen':'Seit','sector':'Sektor','score':'Score','price':'Kurs','currency':'Währung','change_30d':'30T %','drawdown_1y':'Abstand Hoch %','dividend_yield_pct':'Dividende %','forward_pe':'Forward-KGV','data_coverage':'Datenfelder / 7'}), use_container_width=True, hide_index=True)
 
 if len(filtered):
-    selected = st.selectbox('Aktie im Detail untersuchen', filtered['ticker'].tolist(), format_func=lambda t: f"{t} · {df.loc[df.ticker==t,'name'].iloc[0]}")
+    available_tickers = filtered['ticker'].tolist()
+    if st.session_state.get('selected_stock') not in available_tickers:
+        st.session_state['selected_stock'] = available_tickers[0]
+    selected = st.selectbox('Aktie im Detail untersuchen', available_tickers, key='selected_stock',
+                            format_func=lambda t: f"{t} · {df.loc[df.ticker==t,'name'].iloc[0]}")
     stock = next(s for s in stocks if s['ticker'] == selected)
     st.subheader(f"{stock['name']} ({selected})")
     if stock.get('is_new'):
@@ -132,7 +171,7 @@ if len(filtered):
             st.caption(explanation)
         st.markdown(f"**Gesamt: {stock['score']:.1f} / 100 Punkte**")
     st.caption('Gewichtung: Kursrückgang 25 % · Dividende 15 % · Gewinnmarge 15 % · ROE 10 % · Bewertung 15 % · Cashflow 10 % · Verschuldung 10 %.')
-    st.info('Die quantitative Bewertung ist regelbasiert. Es liegt **kein verifizierter Fair Value** vor.')
+    st.info('**Einordnung:** Screening-Score ≠ Kaufempfehlung. Kein verifizierter fairer Wert, kein Kursziel und keine persönliche Anlageberatung.')
     st.caption(f"Kursdatum: {stock.get('price_as_of', '?')} · Quelle: {stock.get('data_provider', '?')} · Abdeckung: {stock.get('data_coverage', '?')}/7 Felder")
     st.link_button('Kurs- und Nachrichtenansicht öffnen', f'https://finance.yahoo.com/quote/{selected}/')
 
