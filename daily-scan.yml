@@ -1,4 +1,4 @@
-name: Daily stock scan
+name: .github/workflows/daily-scan.yml
 on:
   workflow_dispatch:
   schedule:
