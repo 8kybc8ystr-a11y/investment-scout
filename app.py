@@ -8,12 +8,12 @@ import streamlit as st
 from ai_research import get_news, build_analysis
 from security import require_login, check_ai_limit, register_ai_request
 
-st.set_page_config(page_title='Investment Scout V2', page_icon='📈', layout='wide')
+st.set_page_config(page_title='Investment Scout V3', page_icon='📈', layout='wide')
 require_login()
 
 ROOT = Path(__file__).resolve().parent
 st.title('📈 Investment Scout')
-st.caption('Globaler Dividenden- & Kursrückgang-Screener · KI-Research auf Abruf · Keine Anlageberatung')
+st.caption('Automatische Kandidatensuche · Dividenden- & Kursrückgang-Screener · KI-Research auf Abruf · Keine Anlageberatung')
 
 snapshot = ROOT / 'data' / 'latest.json'
 if not snapshot.exists():
@@ -38,6 +38,7 @@ with st.sidebar:
     min_score = st.slider('Mindest-Score', 0, 100, 40)
     min_dividend = st.slider('Mindestrendite (%)', 0.0, 10.0, 0.0, 0.5)
     only_corrections = st.checkbox('Mindestens 15 % unter 1-Jahres-Hoch', False)
+    source_filter = st.selectbox('Aktienquelle', ['Alle', 'Eigene Liste', 'Automatisch entdeckt'])
     search = st.text_input('Aktienname / Symbol')
     st.divider()
     st.caption('Datenanbieter: Yahoo Finance (inoffizielle Schnittstelle). Kennzahlen können fehlen, verzögert oder falsch sein. Kein Echtzeit-Feed.')
@@ -46,6 +47,11 @@ filtered = df[df['region'].isin(regions) & (df['score'] >= min_score)].copy()
 filtered = filtered[filtered['dividend_yield_pct'].fillna(-1) >= min_dividend]
 if only_corrections:
     filtered = filtered[filtered['drawdown_1y'].fillna(0) <= -15]
+if source_filter != 'Alle' and 'discovery_source' in filtered.columns:
+    if source_filter == 'Eigene Liste':
+        filtered = filtered[filtered['discovery_source'] == 'Eigene Liste']
+    else:
+        filtered = filtered[filtered['discovery_source'] != 'Eigene Liste']
 if search:
     filtered = filtered[filtered['ticker'].str.contains(search, case=False, regex=False) | filtered['name'].str.contains(search, case=False, regex=False)]
 
@@ -58,13 +64,25 @@ if data.get('errors'):
     st.caption(f"{len(data['errors'])} Aktien konnten nicht verarbeitet werden. Details unten.")
 
 st.subheader('Investment-Ranking')
+if 'discovery_source' in df.columns:
+    new_count = int((df['discovery_source'] != 'Eigene Liste').sum())
+    st.info(f'🔎 Automatische Kandidatensuche: {new_count} zusätzlich entdeckte Aktien erfolgreich analysiert. Täglich wechselnde Auswahl aus S&P 500 und Nasdaq-100; kein vollständiger Weltmarkt-Scan.')
+    if data.get('discovery_errors'):
+        with st.expander('Hinweise zur Kandidatensuche'):
+            st.write(data['discovery_errors'])
+else:
+    st.caption('Noch ein V2-Datensnapshot geladen. Nach dem nächsten V3-GitHub-Scan erscheint hier die automatische Kandidatensuche.')
 cols = ['ticker', 'name', 'region', 'sector', 'score', 'price', 'currency', 'change_30d', 'drawdown_1y', 'dividend_yield_pct', 'forward_pe', 'data_coverage']
-st.dataframe(filtered[cols].rename(columns={'ticker':'Symbol','name':'Unternehmen','region':'Region','sector':'Sektor','score':'Score','price':'Kurs','currency':'Währung','change_30d':'30T %','drawdown_1y':'Abstand Hoch %','dividend_yield_pct':'Dividende %','forward_pe':'Forward-KGV','data_coverage':'Datenfelder / 7'}), use_container_width=True, hide_index=True)
+if 'discovery_source' in filtered.columns:
+    cols.insert(3, 'discovery_source')
+st.dataframe(filtered[cols].rename(columns={'ticker':'Symbol','name':'Unternehmen','region':'Region','discovery_source':'Quelle','sector':'Sektor','score':'Score','price':'Kurs','currency':'Währung','change_30d':'30T %','drawdown_1y':'Abstand Hoch %','dividend_yield_pct':'Dividende %','forward_pe':'Forward-KGV','data_coverage':'Datenfelder / 7'}), use_container_width=True, hide_index=True)
 
 if len(filtered):
     selected = st.selectbox('Aktie im Detail untersuchen', filtered['ticker'].tolist(), format_func=lambda t: f"{t} · {df.loc[df.ticker==t,'name'].iloc[0]}")
     stock = next(s for s in stocks if s['ticker'] == selected)
     st.subheader(f"{stock['name']} ({selected})")
+    if stock.get('discovery_source') and stock['discovery_source'] != 'Eigene Liste':
+        st.caption(f"🔎 Automatisch entdeckt über {stock['discovery_source']}")
     x, y, z = st.columns(3)
     x.metric('Kurs', f"{stock['price']:.2f} {stock['currency']}")
     y.metric('Score', f"{stock['score']:.0f}/100")
