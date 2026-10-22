@@ -1,11 +1,16 @@
 import json
 from pathlib import Path
+
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+
 from ai_research import get_news, build_analysis
+from security import require_login, check_ai_limit, register_ai_request
 
 st.set_page_config(page_title='Investment Scout V2', page_icon='📈', layout='wide')
+require_login()
+
 ROOT = Path(__file__).resolve().parent
 st.title('📈 Investment Scout')
 st.caption('Globaler Dividenden- & Kursrückgang-Screener · KI-Research auf Abruf · Keine Anlageberatung')
@@ -92,7 +97,11 @@ if len(filtered):
         api_key = ''
     if not api_key:
         st.warning('Für die KI-Analyse muss OPENAI_API_KEY in Streamlit Secrets hinterlegt werden. Der restliche Screener funktioniert weiterhin.')
-    if st.button('KI-Investmentanalyse erstellen', type='primary', disabled=not bool(api_key), key=f'ai_{selected}'):
+
+    allowed, limit_message = check_ai_limit()
+    st.caption(limit_message)
+    if st.button('KI-Investmentanalyse erstellen', type='primary', disabled=not bool(api_key) or not allowed, key=f'ai_{selected}'):
+        register_ai_request()
         with st.spinner('Nachrichten abrufen und Analyse erstellen …'):
             try:
                 news = get_news(selected)
