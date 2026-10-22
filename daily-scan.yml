@@ -27,12 +27,14 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           cp data/latest.json /tmp/investment-scout-latest.json
+          cp data/top5_history.json /tmp/investment-scout-top5-history.json
           git reset --hard HEAD
           git fetch origin main
           git checkout -B main origin/main
           mkdir -p data
           cp /tmp/investment-scout-latest.json data/latest.json
-          git add data/latest.json
+          cp /tmp/investment-scout-top5-history.json data/top5_history.json
+          git add data/latest.json data/top5_history.json
           if git diff --cached --quiet; then
             echo "Keine neuen Änderungen."
             exit 0

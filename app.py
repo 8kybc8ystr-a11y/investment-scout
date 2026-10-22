@@ -7,8 +7,9 @@ import streamlit as st
 
 from ai_research import get_news, build_analysis
 from security import require_login, check_ai_limit, register_ai_request
+from performance import load_ledger, performance_rows, daily_cohorts
 
-st.set_page_config(page_title='Investment Scout V3.3', page_icon='📈', layout='wide')
+st.set_page_config(page_title='Investment Scout V3.4', page_icon='📈', layout='wide')
 require_login()
 
 ROOT = Path(__file__).resolve().parent
@@ -18,7 +19,7 @@ st.markdown("""<style>
 h1 {letter-spacing: -.035em}
 </style>""", unsafe_allow_html=True)
 st.title('Investment Scout  |  Marktübersicht')
-st.caption('V3.3 · Regelbasiertes Aktien-Screening · Manuelle KI-Recherche · Keine Kaufempfehlung')
+st.caption('V3.4 · Regelbasiertes Aktien-Screening · Manuelle KI-Recherche · Keine Kaufempfehlung')
 
 snapshot = ROOT / 'data' / 'latest.json'
 if not snapshot.exists():
@@ -100,6 +101,46 @@ st.info('Ein hoher Score zeigt nur, dass eine Aktie die gewählten quantitativen
         'Vor einem Kauf sollten Bewertung, Nachrichten, Bilanz und persönliche Risikotoleranz geprüft werden.')
 with st.expander('Wie werden die Top 5 ermittelt?', expanded=False):
     st.markdown('**Tägliche Auswahl:** Der Scanner untersucht die eigene Aktienliste und zusätzliche automatisch gefundene Kandidaten. Für die Top 5 werden nur Aktien mit mindestens fünf von sieben Fundamentaldatenfeldern berücksichtigt. Danach entscheidet der **Chancen-Risiko-Index**; bei Gleichstand gewinnt die höhere Datenabdeckung.\n\n**Punkteverteilung:** Kursrückgang 25 · Dividendenrendite 15 · Gewinnmarge 15 · Eigenkapitalrendite 10 · Forward-KGV 15 · positiver freier Cashflow 10 · Verschuldung 10.\n\n**Kombination:** 70 % Attraktivitäts-Score + 30 % (100 − Risiko-Score). Beim Risiko-Score bedeuten 100 Punkte hohe Risiken. Fehlende Risikodaten werden vorsichtig mit Teilpunkten berücksichtigt. Der Index ist kein Renditeversprechen.\n\n**Grenzen:** Der Score ist heuristisch, branchenübergreifend nur eingeschränkt vergleichbar und berücksichtigt keine vollständige Unternehmensbewertung. Die Top 5 sind die attraktivsten **innerhalb der tatsächlich gescannten Auswahl**, nicht des gesamten Aktienmarkts.')
+
+st.divider()
+st.subheader('📊 Historie der täglichen Top 5')
+st.caption('Ab V3.4 werden die tatsächlichen Tagesauswahlen gespeichert. Keine rückwirkend konstruierten Treffer und kein historischer Backtest.')
+ledger_path = ROOT / 'data' / 'top5_history.json'
+if not ledger_path.exists():
+    st.info('Noch keine Auswahlhistorie vorhanden. Starte den V3.4-Scan; ab dann werden die täglichen Top 5 protokolliert.')
+else:
+    ledger = load_ledger(ledger_path)
+    selections = pd.DataFrame(ledger.get('picks', []))
+    if selections.empty:
+        st.info('Noch keine Top-5-Auswahlen gespeichert.')
+    else:
+        dates = sorted(selections['selection_date'].unique(), reverse=True)
+        chosen_date = st.selectbox('Top-5-Auswahl vom', dates, key='history_day')
+        chosen = selections[selections['selection_date'] == chosen_date].sort_values('rank')
+        show_cols = ['rank', 'ticker', 'name', 'entry_date', 'entry_price', 'currency', 'opportunity_risk_score', 'risk_score']
+        st.dataframe(chosen[show_cols].rename(columns={
+            'rank':'Rang', 'ticker':'Symbol', 'name':'Unternehmen', 'entry_date':'Kursdatum',
+            'entry_price':'Startkurs', 'currency':'Währung', 'opportunity_risk_score':'Ranking-Index',
+            'risk_score':'Risiko'}), hide_index=True, use_container_width=True)
+        horizon = st.radio('Beobachtungszeitraum (Kalendertage)', [7, 30, 90], horizontal=True, index=0)
+        completed = performance_rows(ledger, horizon)
+        selected_returns = [r for r in completed if r['selection_date'] == chosen_date]
+        if selected_returns:
+            st.dataframe(pd.DataFrame(selected_returns)[['ticker', 'entry_price', 'exit_price', 'exit_date', 'return_pct']].rename(columns={
+                'ticker':'Symbol', 'entry_price':'Startkurs', 'exit_price':'Vergleichskurs',
+                'exit_date':'Vergleichsdatum', 'return_pct':'Kursänderung %'}), hide_index=True, use_container_width=True)
+        else:
+            st.caption('Für diesen Tag liegen noch keine ausreichend alten und vollständig beobachteten Vergleichskurse vor.')
+        cohorts = daily_cohorts(ledger, horizon)
+        if cohorts:
+            cohort_df = pd.DataFrame(cohorts)
+            st.metric(f'Durchschnitt aller vollständigen Top-5-Tagesgruppen nach {horizon} Tagen',
+                      f"{cohort_df['return_pct'].mean():+.2f} %")
+            st.line_chart(cohort_df.set_index('date')['return_pct'], y_label='Durchschnittliche Kursänderung (%)')
+            st.caption(f'{len(cohorts)} vollständig beobachtete Tagesgruppen. Jede Aktie wird innerhalb ihres Tages gleich gewichtet; wiederkehrende Aktien können mehrfach zählen.')
+        else:
+            st.caption('Noch keine vollständigen Top-5-Tagesgruppen für diesen Zeitraum verfügbar.')
+    st.caption('Vergleich mit dem ersten gespeicherten Schlusskurs am/kurz nach dem Zieltag (max. 4 Kalendertage später). Fehlende Kurse werden nicht geschätzt. Keine Gebühren, Steuern oder Währungsumrechnung; historische Adjustierungen und Dividenden können die Vergleichbarkeit beeinflussen. Kein Benchmark oder Nachweis einer Überrendite.')
 
 st.divider()
 st.subheader('Alle Aktien im Ranking')

@@ -10,6 +10,7 @@ from datetime import date
 import pandas as pd
 import yfinance as yf
 from discovery import discover
+from performance import load_ledger, update_ledger, tracked_missing
 
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / 'data' / 'latest.json'
@@ -222,6 +223,24 @@ def main():
     temp = output.with_suffix('.tmp')
     temp.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
     temp.replace(output)
+    # Maintain historical selections independently of the rotating daily universe.
+    ledger_path = ROOT / 'data' / 'top5_history.json'
+    ledger = load_ledger(ledger_path)
+    additional = {}
+    for symbol in tracked_missing(result['stocks'], ledger):
+        try:
+            h = yf.Ticker(symbol).history(period='5d', auto_adjust=True)
+            closes = h['Close'].dropna()
+            if not closes.empty:
+                additional[symbol] = {'date': closes.index[-1].strftime('%Y-%m-%d'),
+                                      'price': float(closes.iloc[-1])}
+        except Exception:
+            pass  # Missing observations remain missing, never estimated.
+        time.sleep(0.05)
+    ledger = update_ledger(ledger, result['stocks'], result['generated_at_utc'][:10], additional)
+    tmp_ledger = ledger_path.with_suffix('.tmp')
+    tmp_ledger.write_text(json.dumps(ledger, ensure_ascii=False, indent=2), encoding='utf-8')
+    tmp_ledger.replace(ledger_path)
     print(f"Scanned {result['success_count']}/{result['universe_count']} symbols; discovered {result['discovered_count']}; saved {output}")
 
 
