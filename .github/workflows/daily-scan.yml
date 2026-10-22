@@ -33,14 +33,26 @@ jobs:
 
       - name: Commit and push snapshot
         run: |
+          
+      - name: Commit and push snapshot
+        run: |
+          
+      - name: Commit and push snapshot
+        run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+          # Scan-Ergebnis vorübergehend sichern
           cp data/latest.json /tmp/investment-scout-latest.json
 
+          # Lokale Änderungen verwerfen
+          git reset --hard HEAD
+
+          # Aktuellen Stand von GitHub holen
           git fetch origin main
           git checkout -B main origin/main
 
+          # Scan-Ergebnis wiederherstellen
           mkdir -p data
           cp /tmp/investment-scout-latest.json data/latest.json
 
@@ -67,3 +79,5 @@ jobs:
 
           echo "Snapshot konnte nicht hochgeladen werden."
           exit 1
+
+
