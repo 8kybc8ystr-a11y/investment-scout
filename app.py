@@ -8,7 +8,7 @@ import streamlit as st
 from ai_research import get_news, build_analysis
 from security import require_login, check_ai_limit, register_ai_request
 
-st.set_page_config(page_title='Investment Scout V3.2', page_icon='📈', layout='wide')
+st.set_page_config(page_title='Investment Scout V3.3', page_icon='📈', layout='wide')
 require_login()
 
 ROOT = Path(__file__).resolve().parent
@@ -18,7 +18,7 @@ st.markdown("""<style>
 h1 {letter-spacing: -.035em}
 </style>""", unsafe_allow_html=True)
 st.title('Investment Scout  |  Marktübersicht')
-st.caption('V3.2 · Regelbasiertes Aktien-Screening · Manuelle KI-Recherche · Keine Kaufempfehlung')
+st.caption('V3.3 · Regelbasiertes Aktien-Screening · Manuelle KI-Recherche · Keine Kaufempfehlung')
 
 snapshot = ROOT / 'data' / 'latest.json'
 if not snapshot.exists():
@@ -69,12 +69,15 @@ if data.get('errors'):
     st.caption(f"{len(data['errors'])} Aktien konnten nicht verarbeitet werden. Details unten.")
 
 # Top 5 aus dem gesamten heutigen Scan, unabhängig von den persönlichen Tabellenfiltern.
+if 'risk_score' not in df.columns or 'opportunity_risk_score' not in df.columns:
+    st.warning('Die Risiko-Scores fehlen noch. Bitte zuerst den neuen V3.3-Scanner über GitHub Actions ausführen.')
+    st.stop()
+
 # Für eine Mindestzuverlässigkeit werden Aktien mit sehr lückenhaften Fundamentaldaten ausgeschlossen.
-st.subheader('Top 5 des Tages')
-st.caption('Die fünf höchstbewerteten Aktien mit mindestens 5 von 7 verfügbaren Kennzahlen. '
-           'Sortierung: Attraktivitäts-Score, dann Datenabdeckung. Keine Kaufempfehlung und keine Kursprognose.')
+st.subheader('Top 5 · Chancen-Risiko-Ranking')
+st.caption('Die fünf besten Werte des kombinierten Rankings mit mindestens 5 von 7 Fundamentaldaten. 70 % Attraktivität und 30 % niedrigeres gemessenes Risiko. Keine Kaufempfehlung.')
 top_candidates = df[df['data_coverage'].fillna(0) >= 5].sort_values(
-    ['score', 'data_coverage', 'ticker'], ascending=[False, False, True]
+    ['opportunity_risk_score', 'data_coverage', 'ticker'], ascending=[False, False, True]
 ).head(5)
 if top_candidates.empty:
     st.warning('Heute gibt es keine Kandidaten mit ausreichend vollständigen Fundamentaldaten (mindestens 5/7).')
@@ -87,7 +90,8 @@ else:
                 new_mark = ' 🆕' if candidate.get('is_new', False) else ''
                 st.markdown(f'**#{pos} · {ticker_name}{new_mark}**')
                 st.caption(str(candidate.get('name', ticker_name))[:42])
-                st.metric('Screening-Score', f"{candidate['score']:.0f}/100")
+                st.metric('Ranking-Index', f"{candidate['opportunity_risk_score']:.0f}/100")
+                st.caption(f"Attraktivität: {candidate['score']:.0f}/100 · Risiko: {candidate['risk_score']:.0f}/100 (hoch = riskanter)")
                 st.caption(f"Datenqualität: {int(candidate['data_coverage'])}/7 · {candidate.get('region','–')}")
                 if st.button('Details ansehen', key=f'top_{ticker_name}', use_container_width=True):
                     st.session_state['selected_stock'] = ticker_name
@@ -95,10 +99,11 @@ st.info('Ein hoher Score zeigt nur, dass eine Aktie die gewählten quantitativen
         'Ein Kursrückgang oder eine hohe Dividende kann auch ein Warnsignal sein. '
         'Vor einem Kauf sollten Bewertung, Nachrichten, Bilanz und persönliche Risikotoleranz geprüft werden.')
 with st.expander('Wie werden die Top 5 ermittelt?', expanded=False):
-    st.markdown('**Tägliche Auswahl:** Der Scanner untersucht die eigene Aktienliste und zusätzliche automatisch gefundene Kandidaten. Für die Top 5 werden nur Aktien mit mindestens fünf von sieben Fundamentaldatenfeldern berücksichtigt. Danach entscheidet der **Score von 0 bis 100**; bei Gleichstand gewinnt die höhere Datenabdeckung.\n\n**Punkteverteilung:** Kursrückgang 25 · Dividendenrendite 15 · Gewinnmarge 15 · Eigenkapitalrendite 10 · Forward-KGV 15 · positiver freier Cashflow 10 · Verschuldung 10.\n\n**Grenzen:** Der Score ist heuristisch, branchenübergreifend nur eingeschränkt vergleichbar und berücksichtigt keine vollständige Unternehmensbewertung. Die Top 5 sind die attraktivsten **innerhalb der tatsächlich gescannten Auswahl**, nicht des gesamten Aktienmarkts.')
+    st.markdown('**Tägliche Auswahl:** Der Scanner untersucht die eigene Aktienliste und zusätzliche automatisch gefundene Kandidaten. Für die Top 5 werden nur Aktien mit mindestens fünf von sieben Fundamentaldatenfeldern berücksichtigt. Danach entscheidet der **Chancen-Risiko-Index**; bei Gleichstand gewinnt die höhere Datenabdeckung.\n\n**Punkteverteilung:** Kursrückgang 25 · Dividendenrendite 15 · Gewinnmarge 15 · Eigenkapitalrendite 10 · Forward-KGV 15 · positiver freier Cashflow 10 · Verschuldung 10.\n\n**Kombination:** 70 % Attraktivitäts-Score + 30 % (100 − Risiko-Score). Beim Risiko-Score bedeuten 100 Punkte hohe Risiken. Fehlende Risikodaten werden vorsichtig mit Teilpunkten berücksichtigt. Der Index ist kein Renditeversprechen.\n\n**Grenzen:** Der Score ist heuristisch, branchenübergreifend nur eingeschränkt vergleichbar und berücksichtigt keine vollständige Unternehmensbewertung. Die Top 5 sind die attraktivsten **innerhalb der tatsächlich gescannten Auswahl**, nicht des gesamten Aktienmarkts.')
 
 st.divider()
 st.subheader('Alle Aktien im Ranking')
+st.caption('Risiko: 0 = niedrigeres gemessenes Risiko, 100 = höheres gemessenes Risiko. Die Werte sind heuristisch und keine Ausfallwahrscheinlichkeiten.')
 if 'discovery_source' in df.columns:
     new_count = int((df['discovery_source'] != 'Eigene Liste').sum())
     st.info(f'🔎 Intelligente Vorauswahl: {new_count} zusätzliche Aktien nach Kursrückgang, Stabilisierung und Liquidität analysiert. Kandidaten aus S&P 500 und Nasdaq-100; kein vollständiger Weltmarkt-Scan.')
@@ -107,7 +112,7 @@ if 'discovery_source' in df.columns:
             st.write(data['discovery_errors'])
 else:
     st.caption('Noch ein V2-Datensnapshot geladen. Nach dem nächsten V3-GitHub-Scan erscheint hier die automatische Kandidatensuche.')
-cols = ['ticker', 'name', 'region', 'sector', 'score', 'price', 'currency', 'change_30d', 'drawdown_1y', 'dividend_yield_pct', 'forward_pe', 'data_coverage']
+cols = ['ticker', 'name', 'region', 'sector', 'score', 'risk_score', 'opportunity_risk_score', 'price', 'currency', 'change_30d', 'drawdown_1y', 'dividend_yield_pct', 'forward_pe', 'data_coverage']
 if 'discovery_source' in filtered.columns:
     cols.insert(3, 'discovery_source')
 if 'is_new' in filtered.columns:
@@ -117,7 +122,7 @@ if 'first_seen' in filtered.columns:
 table_data = filtered[cols].copy()
 if 'is_new' in table_data:
     table_data['is_new'] = table_data['is_new'].map({True: '🆕 Neu', False: '–'}).fillna('–')
-st.dataframe(table_data.rename(columns={'ticker':'Symbol','name':'Unternehmen','region':'Region','discovery_source':'Quelle','is_new':'Neu','first_seen':'Seit','sector':'Sektor','score':'Score','price':'Kurs','currency':'Währung','change_30d':'30T %','drawdown_1y':'Abstand Hoch %','dividend_yield_pct':'Dividende %','forward_pe':'Forward-KGV','data_coverage':'Datenfelder / 7'}), use_container_width=True, hide_index=True)
+st.dataframe(table_data.rename(columns={'ticker':'Symbol','name':'Unternehmen','region':'Region','discovery_source':'Quelle','is_new':'Neu','first_seen':'Seit','sector':'Sektor','score':'Attraktivität','risk_score':'Risiko (hoch = riskant)','opportunity_risk_score':'Chancen-Risiko-Index','price':'Kurs','currency':'Währung','change_30d':'30T %','drawdown_1y':'Abstand Hoch %','dividend_yield_pct':'Dividende %','forward_pe':'Forward-KGV','data_coverage':'Datenfelder / 7'}), use_container_width=True, hide_index=True)
 
 if len(filtered):
     available_tickers = filtered['ticker'].tolist()
@@ -133,10 +138,12 @@ if len(filtered):
         st.caption(f"Erstmals erfasst: {stock['first_seen']}")
     if stock.get('discovery_source') and stock['discovery_source'] != 'Eigene Liste':
         st.caption(f"🔎 Automatisch entdeckt über {stock['discovery_source']}")
-    x, y, z = st.columns(3)
+    x, y, z, w = st.columns(4)
     x.metric('Kurs', f"{stock['price']:.2f} {stock['currency']}")
-    y.metric('Score', f"{stock['score']:.0f}/100")
-    z.metric('Dividendenrendite', f"{stock['dividend_yield_pct']:.2f} %" if stock.get('dividend_yield_pct') is not None else 'Keine Daten')
+    y.metric('Attraktivität', f"{stock['score']:.0f}/100")
+    z.metric('Risiko (hoch = riskant)', f"{stock['risk_score']:.0f}/100")
+    w.metric('Chancen-Risiko-Index', f"{stock['opportunity_risk_score']:.0f}/100")
+    st.caption('Index = 70 % Attraktivität + 30 % (100 − Risiko). Keine Prognose, kein Kauf- oder Verkaufssignal.')
     hist = pd.DataFrame(stock.get('history', []))
     if not hist.empty:
         fig = px.line(hist, x='date', y='close', title='Kursverlauf der letzten 12 Monate (dividenden- und splitbereinigt)', labels={'date':'Datum','close':stock['currency']})
@@ -170,6 +177,25 @@ if len(filtered):
             st.progress(min(1.0, max(0.0, points / maximum)))
             st.caption(explanation)
         st.markdown(f"**Gesamt: {stock['score']:.1f} / 100 Punkte**")
+    with st.expander('🛡️ Risiko-Score verstehen (0 = niedriger, 100 = höher)', expanded=False):
+        st.caption('Heuristische Risikoeinschätzung auf Basis historischer Kurse und verfügbarer Finanzkennzahlen. Fehlende Daten werden neutral bis vorsichtig bewertet; 0 bedeutet nicht risikofrei.')
+        risk_factors = [
+            ('volatility', 'Kursschwankungen (annualisiert)', 20, 'Unter 20 %: 0 · 20–35 %: 7 · 35–55 %: 14 · ab 55 %: 20'),
+            ('max_drawdown', 'Größter 1-Jahres-Kursverlust', 20, 'Bis 15 %: 0 · 15–30 %: 7 · 30–50 %: 14 · über 50 %: 20'),
+            ('leverage', 'Verschuldung (Debt/Equity)', 20, 'Bis 50: 0 · bis 100: 6 · bis 200: 13 · darüber: 20'),
+            ('profitability', 'Gewinnmarge', 15, 'Ab 15 %: 0 · 5–15 %: 5 · 0–5 %: 10 · negativ: 15'),
+            ('cashflow', 'Freier Cashflow', 10, 'Positiv: 0 · negativ/0: 10'),
+            ('dividend', 'Extrem hohe Dividendenrendite', 5, 'Über 8 %: 5 · sonst: 0'),
+            ('momentum', 'Kurzfristiger Kursrückgang', 10, '30T ab −5 %: 0 · −5 bis −15 %: 5 · unter −15 %: 10'),
+        ]
+        for key, label, maximum, explanation in risk_factors:
+            points = float(stock.get('risk_parts', {}).get(key, 0))
+            a, b = st.columns([3, 1])
+            a.markdown(f'**{label}**')
+            b.markdown(f'**{points:g} / {maximum}**')
+            st.progress(min(1.0, max(0.0, points / maximum)))
+            st.caption(explanation)
+        st.caption('Die Punkteschwellen sind Modellannahmen, nicht statistisch kalibrierte Ausfallwahrscheinlichkeiten. Branchenunterschiede und Nachrichtenrisiken bleiben unberücksichtigt.')
     st.caption('Gewichtung: Kursrückgang 25 % · Dividende 15 % · Gewinnmarge 15 % · ROE 10 % · Bewertung 15 % · Cashflow 10 % · Verschuldung 10 %.')
     st.info('**Einordnung:** Screening-Score ≠ Kaufempfehlung. Kein verifizierter fairer Wert, kein Kursziel und keine persönliche Anlageberatung.')
     st.caption(f"Kursdatum: {stock.get('price_as_of', '?')} · Quelle: {stock.get('data_provider', '?')} · Abdeckung: {stock.get('data_coverage', '?')}/7 Felder")

@@ -44,10 +44,16 @@ def get_price_history(ticker):
         base = float(closes.iloc[-n-1])
         return round(100 * (now / base - 1), 2) if base > 0 else None
     peak = float(closes.max())
+    returns = closes.pct_change().dropna()
+    annual_volatility = float(returns.std() * (252 ** .5) * 100) if len(returns) >= 30 else None
+    running_peak = closes.cummax()
+    max_drawdown = float(((closes / running_peak) - 1).min() * 100)
     return {
         'price': round(now, 4), 'change_5d': change(5),
         'change_30d': change(21), 'change_90d': change(63),
         'drawdown_1y': round(100 * (now / peak - 1), 2),
+        'volatility_1y_pct': round(annual_volatility, 2) if annual_volatility is not None else None,
+        'max_drawdown_1y_pct': round(max_drawdown, 2),
         'history': [{'date': idx.strftime('%Y-%m-%d'), 'close': round(float(v), 4)} for idx, v in closes.items()],
         'price_as_of': closes.index[-1].strftime('%Y-%m-%d'),
     }
@@ -74,6 +80,34 @@ def score_stock(row):
     row['score_parts'] = {k: round(v, 1) for k, v in parts.items()}
     row['score'] = round(sum(parts.values()), 1)
     row['data_coverage'] = sum(row.get(k) is not None for k in ['drawdown_1y', 'dividend_yield_pct', 'profit_margin_pct', 'return_on_equity_pct', 'forward_pe', 'free_cash_flow', 'debt_to_equity'])
+    return row
+
+
+def score_risk(row):
+    """Transparent heuristic risk indicator: 0 low measured risk, 100 high.
+
+    Missing fundamentals receive a neutral partial penalty, not an invented safe score.
+    The indicator is not a default-probability model or a forecast.
+    """
+    parts = {}
+    vol = row.get('volatility_1y_pct')
+    parts['volatility'] = 10 if vol is None else (0 if vol < 20 else 7 if vol < 35 else 14 if vol < 55 else 20)
+    dd = row.get('max_drawdown_1y_pct')
+    parts['max_drawdown'] = 10 if dd is None else (0 if dd > -15 else 7 if dd > -30 else 14 if dd > -50 else 20)
+    debt = row.get('debt_to_equity')
+    parts['leverage'] = 10 if debt is None or debt < 0 else (0 if debt <= 50 else 6 if debt <= 100 else 13 if debt <= 200 else 20)
+    margin = row.get('profit_margin_pct')
+    parts['profitability'] = 8 if margin is None else (0 if margin >= 15 else 5 if margin >= 5 else 10 if margin >= 0 else 15)
+    fcf = row.get('free_cash_flow')
+    parts['cashflow'] = 5 if fcf is None else (0 if fcf > 0 else 10)
+    dy = row.get('dividend_yield_pct')
+    parts['dividend'] = 3 if dy is None else (5 if dy > 8 else 0)
+    c30 = row.get('change_30d')
+    parts['momentum'] = 5 if c30 is None else (0 if c30 >= -5 else 5 if c30 > -15 else 10)
+    row['risk_parts'] = parts
+    row['risk_score'] = int(sum(parts.values()))
+    # A ranking heuristic, not an estimated expected return or investment recommendation.
+    row['opportunity_risk_score'] = round(.7 * row['score'] + .3 * (100 - row['risk_score']), 1)
     return row
 
 
@@ -159,14 +193,14 @@ def scan(symbols=None, pause=0.15, discovery_count=15):
             if 'discovery_rank_score' in record:
                 row['discovery_rank_score'] = record['discovery_rank_score']
                 row['avg_daily_dollar_volume'] = record['avg_daily_dollar_volume']
-            row = score_stock(row)
+            row = score_risk(score_stock(row))
             row['positives'], row['risks'] = explain(row)
             stocks.append(row)
         except Exception as exc:
             errors.append({'ticker': symbol, 'error': str(exc)[:180]})
         time.sleep(pause)
     stocks.sort(key=lambda r: (r['score'], r['data_coverage']), reverse=True)
-    return {'generated_at_utc': datetime.now(timezone.utc).isoformat(), 'method': 'rules_v3_1', 'first_seen_registry': first_seen,
+    return {'generated_at_utc': datetime.now(timezone.utc).isoformat(), 'method': 'rules_v3_3', 'first_seen_registry': first_seen,
             'universe_count': len(records), 'success_count': len(stocks),
             'discovered_count': len(discovered), 'discovery_errors': discovery_errors,
             'stocks': stocks, 'errors': errors}
